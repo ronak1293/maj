@@ -2,7 +2,8 @@
 import axios from 'axios';
 
 export const getEmbedding = async (imagePath) => {
-  const res = await axios.post('http://localhost:8000/embed', {
+  const PYTHON_URL = process.env.PYTHON_SERVER_URL || "http://localhost:8000";
+  const res = await axios.post(`${PYTHON_URL}/embed`, {
     imagePath,
   });
   

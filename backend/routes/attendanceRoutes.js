@@ -6,6 +6,6 @@ const router = express.Router();
 
 const upload = multer({ dest: 'uploads/' });
 
-router.post('/mark/:courseId', upload.single('image'), markAttendance);
+router.post('/mark/:courseId', upload.single('video'), markAttendance);
 
 export default router;
