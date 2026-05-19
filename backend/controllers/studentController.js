@@ -1,19 +1,37 @@
 import Student from '../models/Student.js';
 import Enrollment from '../models/Enrollment.js';
 import Attendance from '../models/Attendance.js';
-import { getEmbedding } from '../services/faceService.js';
-import path from 'path';
+import axios from 'axios';
+import FormData from 'form-data';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helper — send image buffer to Python /embed endpoint
+// Instead of passing a file path, we POST the raw image bytes
+// ─────────────────────────────────────────────────────────────────────────────
+const getEmbeddingFromBuffer = async (buffer, filename) => {
+  const PYTHON_URL = process.env.PYTHON_SERVER_URL || "http://localhost:8000";
+
+  const formData = new FormData();
+  formData.append('file', buffer, {
+    filename: filename || 'image.jpg',
+    contentType: 'image/jpeg',
+  });
+
+  const response = await axios.post(`${PYTHON_URL}/embed`, formData, {
+    headers: formData.getHeaders(),
+  });
+
+  return response.data.embedding;
+};
+
 
 export const uploadStudents = async (req, res) => {
   try {
-    console.log("recieved");
-    
-    const { courseId } = req.params;
+    console.log("received");
 
+    const { courseId } = req.params;
     const { studentIds, names } = req.body;
     const files = req.files;
-    console.log(studentIds);
-    
 
     if (!files || files.length === 0) {
       return res.status(400).json({ error: "No images uploaded" });
@@ -23,13 +41,8 @@ export const uploadStudents = async (req, res) => {
       return res.status(400).json({ error: "Missing student data" });
     }
 
-    const studentIdsArr = Array.isArray(studentIds)
-      ? studentIds
-      : [studentIds];
-
-    const namesArr = Array.isArray(names)
-      ? names
-      : [names];
+    const studentIdsArr = Array.isArray(studentIds) ? studentIds : [studentIds];
+    const namesArr = Array.isArray(names) ? names : [names];
 
     if (files.length !== studentIdsArr.length) {
       return res.status(400).json({
@@ -41,42 +54,34 @@ export const uploadStudents = async (req, res) => {
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
-
       const studentId = studentIdsArr[i];
       const name = namesArr[i];
 
-      let fullPath = path.resolve(file.path);
-      fullPath = fullPath.replace(/\\/g, '/');
-
-      const embedding = await getEmbedding(fullPath);
+      // file.buffer contains the image in memory — no disk involved
+      const embedding = await getEmbeddingFromBuffer(
+        file.buffer,
+        file.originalname
+      );
 
       if (!embedding || embedding.length === 0) {
+        console.log(`No face found for student ${studentId}, skipping`);
         continue;
       }
 
-      // changed here
       let student = await Student.findOne({ studentId });
 
-      // changed here
       if (!student) {
-        student = await Student.create({
-          studentId,
-          name,
-        });
+        student = await Student.create({ studentId, name });
       }
 
-      // changed here
       const enrollment = await Enrollment.create({
         studentId,
         course: courseId,
         embedding,
-        imageUrl: fullPath,
+        // no imageUrl stored since we are not saving to disk
       });
 
-      savedStudents.push({
-        student,
-        enrollment
-      });
+      savedStudents.push({ student, enrollment });
     }
 
     res.json({
@@ -96,17 +101,13 @@ export const getStudentCourses = async (req, res) => {
   try {
     const { studentId } = req.params;
 
-    // changed here
-    const enrollments = await Enrollment.find({
-      studentId
-    }).populate("course");
+    const enrollments = await Enrollment.find({ studentId }).populate("course");
 
     if (!enrollments || enrollments.length === 0) {
       return res.status(404).json({ error: "Student not found" });
     }
 
     const courseMap = {};
-
     enrollments.forEach(e => {
       if (e.course) {
         courseMap[e.course._id] = e.course;
@@ -123,78 +124,52 @@ export const getStudentCourses = async (req, res) => {
   }
 };
 
+
 export const getAttendanceStats = async (req, res) => {
   try {
-
     const { studentId, courseId } = req.params;
 
     const records = await Attendance.find({
-      studentId: studentId,
-      courseId: courseId
+      studentId,
+      courseId
     }).sort({ date: 1 });
 
     const total = records.length;
-
-    const present = records.filter(
-      r => r.status === "present"
-    ).length;
-
+    const present = records.filter(r => r.status === "present").length;
     const absent = total - present;
+    const percentage = total === 0
+      ? 0
+      : ((present / total) * 100).toFixed(2);
 
-    const percentage =
-      total === 0
-        ? 0
-        : ((present / total) * 100).toFixed(2);
-
-    res.json({
-      totalClasses: total,
-      present,
-      absent,
-      percentage,
-      records
-    });
+    res.json({ totalClasses: total, present, absent, percentage, records });
 
   } catch (err) {
-
-    res.status(500).json({
-      error: err.message
-    });
-
+    res.status(500).json({ error: err.message });
   }
 };
 
 
 export const getStudentDetails = async (req, res) => {
   try {
-
     const { studentId } = req.params;
 
-    // get student basic info
     const student = await Student.findOne({ studentId });
 
     if (!student) {
-      return res.status(404).json({
-        error: "Student not found"
-      });
+      return res.status(404).json({ error: "Student not found" });
     }
 
-    // get all enrollments + courses
-    const enrollments = await Enrollment.find({
-      studentId
-    }).populate("course");
+    const enrollments = await Enrollment.find({ studentId }).populate("course");
 
     res.json({
       student: {
         studentId: student.studentId,
         name: student.name,
       },
-
       enrollments
     });
 
   } catch (err) {
-    res.status(500).json({
-      error: err.message
-    });
+    res.status(500).json({ error: err.message });
   }
 };

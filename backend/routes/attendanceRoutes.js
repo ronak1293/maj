@@ -4,7 +4,9 @@ import { markAttendance } from '../controllers/attendanceController.js';
 
 const router = express.Router();
 
-const upload = multer({ dest: 'uploads/' });
+
+const storage = multer.memoryStorage();
+export const upload = multer({ storage });
 
 router.post('/mark/:courseId', upload.single('video'), markAttendance);
 

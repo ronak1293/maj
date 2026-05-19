@@ -1,82 +1,11 @@
-# from fastapi import FastAPI
-# from pydantic import BaseModel
-# import numpy as np
-# import cv2
-# from insightface.app import FaceAnalysis
-
-# app = FastAPI()
-
-# # Load model
-# face_app = FaceAnalysis(name="buffalo_l")
-# face_app.prepare(ctx_id=-1)  # CPU
-
-# class ImageRequest(BaseModel):
-#     imagePath: str
-
-# @app.post("/embed")
-# def get_embedding(req: ImageRequest):
-#     try:
-#         img = cv2.imread(req.imagePath)
-
-#         if img is None:
-#             return {"error": "Image not found"}
-
-#         faces = face_app.get(img)
-
-#         if len(faces) == 0:
-#             return {"error": "No face detected"}
-
-#         embedding = faces[0].embedding
-
-#         return {
-#             "embedding": embedding.tolist()
-#         }
-
-#     except Exception as e:
-#         return {"error": str(e)}
-# class AttendanceRequest(BaseModel):
-#     imagePath: str
-
-# @app.post("/attendance")
-# def mark_attendance(req: AttendanceRequest):
-#     try:
-#         print("Reading:", req.imagePath)
-
-#         img = cv2.imread(req.imagePath)
-
-#         if img is None:
-#             return {"error": "Image not found"}
-
-#         #  detect ALL faces
-#         faces = face_app.get(img)
-
-#         if len(faces) == 0:
-#             return {"error": "No faces detected"}
-
-#         embeddings = []
-
-#         for face in faces:
-#             embeddings.append(face.embedding.tolist())
-
-#         return {
-#             "count": len(embeddings),
-#             "embeddings": embeddings
-#         }
-
-#     except Exception as e:
-#         return {"error": str(e)}
-    
-
-
-
-from fastapi import FastAPI
-from pydantic import BaseModel
+from fastapi import FastAPI, UploadFile, File
 import numpy as np
 import cv2
 from insightface.app import FaceAnalysis
 from insightface.utils import face_align
 import os
 import torch
+import tempfile
 
 app = FastAPI()
 
@@ -229,12 +158,6 @@ def enhance_image(img: np.ndarray) -> np.ndarray:
     img = apply_bilateral_denoise(img)
     return img
 
-def load_and_preprocess(image_path: str):
-    img = cv2.imread(image_path)
-    if img is None:
-        return None, f"Image not found: {image_path}"
-    return enhance_image(img), None
-
 
 # ══════════════════════════════════════════════
 #  CORE EMBEDDING FUNCTION
@@ -275,7 +198,8 @@ def nms(detections: list, iou_threshold: float = 0.4) -> list:
     while detections:
         best = detections.pop(0)
         kept.append(best)
-        detections = [d for d in detections if compute_iou(best['bbox'], d['bbox']) < iou_threshold]
+        detections = [d for d in detections
+                      if compute_iou(best['bbox'], d['bbox']) < iou_threshold]
     return kept
 
 
@@ -300,52 +224,55 @@ def sahi_detect(img: np.ndarray, tile_size: int = 640,
             tile = img[y1:y2, x1:x2]
             for face in face_app.get(tile):
                 score = float(face.det_score)
-                if score < min_face_score: continue
+                if score < min_face_score:
+                    continue
                 tx1, ty1, tx2, ty2 = face.bbox
                 abs_kps = face.kps.copy()
                 abs_kps[:, 0] += x1
                 abs_kps[:, 1] += y1
                 all_detections.append({
-                    'bbox':  [float(tx1)+x1, float(ty1)+y1, float(tx2)+x1, float(ty2)+y1],
-                    'score': score, 'kps': abs_kps, 'face': face
+                    'bbox':  [float(tx1)+x1, float(ty1)+y1,
+                              float(tx2)+x1, float(ty2)+y1],
+                    'score': score,
+                    'kps':   abs_kps,
+                    'face':  face
                 })
-            if x2 == img_w: break
+            if x2 == img_w:
+                break
             x += step
-        if y2 == img_h: break
+        if y2 == img_h:
+            break
         y += step
 
     # Full-image pass for large/nearby faces
     for face in face_app.get(img):
         score = float(face.det_score)
-        if score < min_face_score: continue
+        if score < min_face_score:
+            continue
         tx1, ty1, tx2, ty2 = face.bbox
         all_detections.append({
-            'bbox': [float(tx1), float(ty1), float(tx2), float(ty2)],
-            'score': score, 'kps': face.kps.copy(), 'face': face
+            'bbox':  [float(tx1), float(ty1), float(tx2), float(ty2)],
+            'score': score,
+            'kps':   face.kps.copy(),
+            'face':  face
         })
 
     return nms(all_detections, iou_threshold=0.4)
 
 
-
+# ══════════════════════════════════════════════
 #  VIDEO FRAME EXTRACTION
+# ══════════════════════════════════════════════
 
-
-FRAME_SAMPLE_INTERVAL = 8   # process every 5th frame
+FRAME_SAMPLE_INTERVAL = 8
 
 def extract_frames(video_path: str) -> list[tuple[int, np.ndarray]]:
     """
-    Opens a video file and yields (frameIndex, frame_bgr) for every
-    FRAME_SAMPLE_INTERVAL-th frame.
+    Opens a video file and returns (frameIndex, enhanced_frame) tuples
+    for every FRAME_SAMPLE_INTERVAL-th frame.
 
-    Returns a list of (frameIndex, enhanced_frame) tuples.
     Enhancement (Gamma → CLAHE → Bilateral) is applied per frame
-    before returning, so each frame is already preprocessed for SAHI.
-
-    Why enhance per frame (not once at the start)?
-    Videos can change lighting mid-clip (e.g. student walks through shadow).
-    Per-frame enhancement adapts to these changes rather than applying
-    an average correction that might be wrong for individual frames.
+    so lighting changes mid-clip are handled correctly per frame.
     """
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -358,29 +285,15 @@ def extract_frames(video_path: str) -> list[tuple[int, np.ndarray]]:
         ret, frame = cap.read()
         if not ret:
             break
-
-        # Only process every Nth frame
         if frame_idx % FRAME_SAMPLE_INTERVAL == 0:
             enhanced = enhance_image(frame)
             frames.append((frame_idx, enhanced))
-
         frame_idx += 1
 
     cap.release()
-    print(f"Video: {frame_idx} total frames → {len(frames)} sampled (every {FRAME_SAMPLE_INTERVAL}th)")
+    print(f"Video: {frame_idx} total frames → "
+          f"{len(frames)} sampled (every {FRAME_SAMPLE_INTERVAL}th)")
     return frames
-
-
-# ══════════════════════════════════════════════
-#  PYDANTIC SCHEMAS
-# ══════════════════════════════════════════════
-
-class ImageRequest(BaseModel):
-    imagePath: str
-
-class AttendanceRequest(BaseModel):
-    # ── CHANGED: now accepts videoPath instead of imagePath ──
-    videoPath: str
 
 
 # ══════════════════════════════════════════════
@@ -388,165 +301,252 @@ class AttendanceRequest(BaseModel):
 # ══════════════════════════════════════════════
 
 @app.post("/embed")
-def get_embedding(req: ImageRequest):
+async def get_embedding(file: UploadFile = File(...)):
     """
-    Enrollment endpoint — unchanged.
-    Accepts a single image, returns one 512-d embedding.
-    Restoration OFF for enrollment (controlled conditions assumed).
+    Enrollment endpoint.
+    Accepts a raw image file upload (multipart/form-data).
+    Returns one 512-d L2-normalised embedding.
+    Restoration is OFF — enrollment images assumed to be good quality.
     """
-    img, err = load_and_preprocess(req.imagePath)
-    if err:
-        return {"error": err}
-    faces = face_app.get(img)
-    if not faces:
-        return {"error": "No face detected"}
-    embedding = embedding_from_face(
-        img, faces[0], bbox=faces[0].bbox.tolist(), enable_restoration=False
-    )
-    return {"embedding": embedding.tolist()}
+    try:
+        contents = await file.read()
+
+        # Decode image bytes directly into numpy array — no disk write
+        nparr = np.frombuffer(contents, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+        if img is None:
+            return {"error": "Could not decode image"}
+
+        img = enhance_image(img)
+        faces = face_app.get(img)
+
+        if not faces:
+            return {"error": "No face detected"}
+
+        embedding = embedding_from_face(
+            img, faces[0],
+            bbox=faces[0].bbox.tolist(),
+            enable_restoration=False
+        )
+
+        return {"embedding": embedding.tolist()}
+
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @app.post("/attendance")
-def mark_attendance(req: AttendanceRequest):
+async def mark_attendance(file: UploadFile = File(...)):
     """
     Multi-face video attendance endpoint.
+    Accepts a video file upload (multipart/form-data).
 
-    ── WHAT CHANGED vs the old image endpoint ──────────────────────────────
-    OLD: accepted imagePath → ran SAHI on one image → returned flat embeddings[]
-    NEW: accepts videoPath → extracts frames → runs SAHI per frame →
-         returns frames[] with per-frame detections for FaceSORT in Node.js
+    ── FLOW ────────────────────────────────────────────────────────────────
+    1. Write uploaded video bytes to an OS temp file
+    2. Extract every FRAME_SAMPLE_INTERVAL-th frame
+    3. Run SAHI detection + NMS on each frame
+    4. Run embedding_from_face (with conditional CodeFormer) per detection
+    5. Return frames[] with per-frame detections for FaceSORT in Node.js
+    6. Always delete the temp file in the finally block
 
-    ── RESPONSE SHAPE (consumed by FaceSORT controller in Node.js) ─────────
+    ── RESPONSE SHAPE ──────────────────────────────────────────────────────
     {
-      "totalFrames": 120,
-      "sampledFrames": 24,
+      "totalFrames":   int,
+      "sampledFrames": int,
       "frames": [
         {
-          "frameIndex": 0,
+          "frameIndex": int,
           "detections": [
             {
-              "bio":  [512 floats],   // L2-normalised ArcFace embedding
-              "app":  [512 floats],   // same as bio (we reuse — see note below)
-              "bbox": [x, y, w, h]   // in XYWH format for IoU in FaceSORT
+              "bio":  [512 floats],   // L2-normalised embedding
+              "app":  [512 floats],   // same as bio (no separate ReID model)
+              "bbox": [x, y, w, h]   // XYWH format for FaceSORT IoU
             }
           ]
-        },
-        ...
+        }
       ]
     }
 
-    WHY bio == app here:
-      The FaceSORT paper uses separate appearance features (e.g. from a
-      ReID model like OSNet) and biometric features (from a face model).
-      We only have ArcFace, so we pass the same embedding for both.
-      The FaceSORT controller's lambda parameter then weights them equally,
-      which reduces to using only cosine distance on ArcFace embeddings —
-      still correct, just without separate appearance modelling.
-      If you add an OSNet/ReID model later, return 'app' separately here.
-
-    WHY bbox in XYWH (not XYXY):
-      FaceSORT's IoU function expects [x, y, w, h].
-      SCRFD returns [x1, y1, x2, y2] — we convert here at the source
-      so the Node.js tracker doesn't need to know the format.
-
-    ── FRAME-LEVEL RESTORATION STRATEGY ───────────────────────────────────
-    Restoration (CodeFormer) runs per detection per frame.
-    This means a face that is blurry in frame 5 but sharp in frame 10
-    will be restored in frame 5 and not in frame 10 — correct behaviour.
-    FaceSORT's EMA averaging then combines both (restored and unrestored)
-    embeddings, which is fine — the sharp frames will dominate via
-    higher cosine similarity in the matching step.
+    ── WHY TEMP FILE ────────────────────────────────────────────────────────
+    OpenCV VideoCapture requires a file path — it cannot read from a buffer.
+    tempfile.NamedTemporaryFile gives us a real path on any OS without
+    leaving files behind permanently. The finally block always cleans up.
     """
-    print(f"Processing video: {req.videoPath}")
-
-    # ── Step 1: Extract sampled frames from video ────────────────────────
+    tmp_path = None
     try:
-        sampled_frames = extract_frames(req.videoPath)
-    except ValueError as e:
-        return {"error": str(e)}
+        contents = await file.read()
 
-    if not sampled_frames:
-        return {"error": "No frames extracted from video"}
+        # Determine file suffix from original filename for OpenCV codec detection
+        suffix = os.path.splitext(file.filename)[1] if file.filename else '.mp4'
+        if not suffix:
+            suffix = '.mp4'
 
-    total_frames = sampled_frames[-1][0] + 1 if sampled_frames else 0
+        # Write to OS temp directory — NOT the uploads folder
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(contents)
+            tmp_path = tmp.name
 
-    # ── Step 2: Run SAHI detection + embedding on each sampled frame ─────
-    frames_output = []
+        print(f"Processing video from temp: {tmp_path}")
 
-    for frame_idx, enhanced_frame in sampled_frames:
-        # SAHI tiled detection → NMS → unique face bboxes for this frame
-        detections_raw = sahi_detect(
-            enhanced_frame, tile_size=640, overlap_ratio=0.2, min_face_score=0.4
-        )
+        # ── Step 1: Extract sampled frames ──────────────────────────────
+        try:
+            sampled_frames = extract_frames(tmp_path)
+        except ValueError as e:
+            return {"error": str(e)}
 
-        frame_detections = []
+        if not sampled_frames:
+            return {"error": "No frames extracted from video"}
 
-        for det in detections_raw:
-            # Build a proxy face object with the landmarks from SAHI
-            class FaceLike:
-                pass
-            proxy = FaceLike()
-            proxy.kps       = det['kps']
-            proxy.embedding = det['face'].embedding
+        total_frames = sampled_frames[-1][0] + 1 if sampled_frames else 0
 
-            # Get L2-normalised ArcFace embedding (with conditional CodeFormer)
-            bio_emb = embedding_from_face(
-                enhanced_frame, proxy,
-                bbox=det['bbox'],
-                enable_restoration=True   # ON for attendance frames
+        # ── Step 2: SAHI detection + embedding per frame ─────────────────
+        frames_output = []
+
+        for frame_idx, enhanced_frame in sampled_frames:
+            detections_raw = sahi_detect(
+                enhanced_frame,
+                tile_size=640,
+                overlap_ratio=0.2,
+                min_face_score=0.4
             )
 
-            # Convert bbox from XYXY → XYWH for FaceSORT's IoU function
-            x1, y1, x2, y2 = det['bbox']
-            bbox_xywh = [x1, y1, x2 - x1, y2 - y1]
+            frame_detections = []
 
-            frame_detections.append({
-                "bio":  bio_emb.tolist(),
-                "app":  bio_emb.tolist(),   # reuse bio as app — see docstring
-                "bbox": bbox_xywh,
+            for det in detections_raw:
+                # Proxy face object carrying landmarks from SAHI
+                class FaceLike:
+                    pass
+                proxy = FaceLike()
+                proxy.kps       = det['kps']
+                proxy.embedding = det['face'].embedding
+
+                # L2-normalised embedding with conditional CodeFormer restoration
+                bio_emb = embedding_from_face(
+                    enhanced_frame, proxy,
+                    bbox=det['bbox'],
+                    enable_restoration=True
+                )
+
+                # Convert XYXY → XYWH for FaceSORT IoU function in Node.js
+                x1, y1, x2, y2 = det['bbox']
+                bbox_xywh = [x1, y1, x2 - x1, y2 - y1]
+
+                frame_detections.append({
+                    "bio":  bio_emb.tolist(),
+                    "app":  bio_emb.tolist(),  # reuse bio — no separate ReID model
+                    "bbox": bbox_xywh,
+                })
+
+            frames_output.append({
+                "frameIndex": frame_idx,
+                "detections": frame_detections,
             })
 
-        frames_output.append({
-            "frameIndex": frame_idx,
-            "detections": frame_detections,
-        })
+            print(f"  Frame {frame_idx}: {len(frame_detections)} face(s) detected")
 
-        print(f"  Frame {frame_idx}: {len(frame_detections)} face(s) detected")
+        if not any(f['detections'] for f in frames_output):
+            return {"error": "No embeddings found"}
 
-    if not any(f['detections'] for f in frames_output):
-        return {"error": "No embeddings found"}
+        return {
+            "totalFrames":   total_frames,
+            "sampledFrames": len(sampled_frames),
+            "frames":        frames_output,
+        }
 
-    return {
-        "totalFrames":   total_frames,
-        "sampledFrames": len(sampled_frames),
-        "frames":        frames_output,
-    }
+    except Exception as e:
+        return {"error": str(e)}
 
+    finally:
+        # Always clean up temp file regardless of success or failure
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+            print(f"Temp file deleted: {tmp_path}")
 
-# ══════════════════════════════════════════════
-#  ENROLL FROM DIRECTORY — unchanged
-# ══════════════════════════════════════════════
 
 @app.post("/enroll-directory")
-def enroll_from_directory(req: ImageRequest):
-    dir_path = req.imagePath
-    if not os.path.isdir(dir_path):
-        return {"error": f"Not a directory: {dir_path}"}
-    SUPPORTED = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
-    results = []
-    for filename in sorted(os.listdir(dir_path)):
-        if os.path.splitext(filename)[1].lower() not in SUPPORTED:
-            continue
-        img, err = load_and_preprocess(os.path.join(dir_path, filename))
-        if err:
-            results.append({"file": filename, "error": err})
-            continue
-        faces = face_app.get(img)
-        if not faces:
-            results.append({"file": filename, "error": "No face detected"})
-            continue
-        embedding = embedding_from_face(
-            img, faces[0], bbox=faces[0].bbox.tolist(), enable_restoration=False
-        )
-        results.append({"file": filename, "embedding": embedding.tolist()})
-    return {"count": len(results), "results": results}
+async def enroll_from_directory(file: UploadFile = File(...)):
+    """
+    Bulk enrollment from a zip file containing student images.
+
+    ── FLOW ────────────────────────────────────────────────────────────────
+    Previously this accepted a directory path on disk, which only worked
+    when Node.js and Python were on the same machine.
+
+    New approach: Node.js zips the image folder and sends it here.
+    Python extracts to a temp directory, processes each image,
+    then cleans up the temp directory.
+
+    ── EXPECTED ZIP STRUCTURE ───────────────────────────────────────────────
+    studentId_name.jpg   (e.g. 2022UCP1729_Ronak.jpg)
+    2022UCP1312_Digvijay.jpg
+    ...
+
+    ── RESPONSE ─────────────────────────────────────────────────────────────
+    {
+      "count": int,
+      "results": [
+        { "file": "2022UCP1729_Ronak.jpg", "embedding": [512 floats] },
+        { "file": "2022UCP1312_Digvijay.jpg", "error": "No face detected" }
+      ]
+    }
+    """
+    import zipfile
+    import shutil
+
+    tmp_dir = None
+    try:
+        contents = await file.read()
+
+        # Extract zip to temp directory
+        tmp_dir = tempfile.mkdtemp()
+        zip_path = os.path.join(tmp_dir, 'upload.zip')
+
+        with open(zip_path, 'wb') as f:
+            f.write(contents)
+
+        with zipfile.ZipFile(zip_path, 'r') as zf:
+            zf.extractall(tmp_dir)
+
+        SUPPORTED = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+        results = []
+
+        for filename in sorted(os.listdir(tmp_dir)):
+            if os.path.splitext(filename)[1].lower() not in SUPPORTED:
+                continue
+
+            filepath = os.path.join(tmp_dir, filename)
+            img = cv2.imread(filepath)
+
+            if img is None:
+                results.append({"file": filename, "error": "Could not read image"})
+                continue
+
+            img = enhance_image(img)
+            faces = face_app.get(img)
+
+            if not faces:
+                results.append({"file": filename, "error": "No face detected"})
+                continue
+
+            embedding = embedding_from_face(
+                img, faces[0],
+                bbox=faces[0].bbox.tolist(),
+                enable_restoration=False
+            )
+
+            results.append({
+                "file":      filename,
+                "embedding": embedding.tolist()
+            })
+
+        return {"count": len(results), "results": results}
+
+    except Exception as e:
+        return {"error": str(e)}
+
+    finally:
+        # Always clean up temp directory
+        if tmp_dir and os.path.exists(tmp_dir):
+            shutil.rmtree(tmp_dir)
+            print(f"Temp directory deleted: {tmp_dir}")
