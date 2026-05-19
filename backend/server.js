@@ -17,7 +17,8 @@ app.use((req, res, next) => {
   console.log("HIT:", req.method, req.url);
   next();
 });
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // REMOVE this line — no disk on Vercel
 // app.use('/uploads', express.static('uploads'));
