@@ -1,0 +1,40 @@
+{
+  "name": "attendance-app",
+  "version": "1.0.0",
+  "main": "expo-router/entry",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios"
+  },
+  "dependencies": {
+    "@expo/vector-icons": "^15.0.2",
+    "@react-native-async-storage/async-storage": "^2.2.0",
+    "axios": "^1.14.0",
+    "babel-preset-expo": "^55.0.12",
+    "buffer": "^6.0.3",
+    "expo": "~55.0.0",
+    "expo-av": "^16.0.8",
+    "expo-build-properties": "^55.0.11",
+    "expo-camera": "~55.0.18",
+    "expo-file-system": "~55.0.20",
+    "expo-image-picker": "~55.0.13",
+    "expo-router": "~55.0.7",
+    "expo-sharing": "~55.0.14",
+    "expo-video-thumbnails": "^55.0.15",
+    "mime": "^4.1.0",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "react-native": "0.83.2",
+    "react-native-calendars": "^1.1314.0",
+    "react-native-fs": "^2.20.0",
+    "react-native-safe-area-context": "~5.6.2",
+    "react-native-screens": "~4.23.0",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.24.0",
+    "react-refresh": "^0.18.0"
+  },
+  "private": true
+}

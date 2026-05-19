@@ -1,0 +1,61 @@
+{
+  "expo": {
+    "name": "AttendanceApp",
+    "slug": "attendance-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "attendanceapp",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.attendance.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Used for face detection attendance.",
+        "NSPhotoLibraryUsageDescription": "Used to upload student photos."
+      }
+    },
+    "android": {
+      "usesCleartextTraffic": true,
+      "package": "com.attendance.app",
+      "permissions": [
+  "android.permission.CAMERA",
+  "android.permission.READ_MEDIA_IMAGES",
+  "android.permission.RECORD_AUDIO"
+]
+    },
+    "plugins": [
+      "expo-router",
+      "expo-camera",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow app to access photos for student registration."
+        }
+      ],
+      [
+         "expo-file-system",
+        {
+          "supportsOpeningDocumentsInPlace": true,
+          "enableFileSharing": true
+        }
+      ],
+      ["expo-build-properties",
+    {
+      "android":{
+        "usesClearTextTraffic":true
+      }
+    }],
+    
+      "expo-sharing"
+    ],
+    "experiments": {
+      "typedRoutes": false
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "621b5dee-1449-4bcd-b4c2-497db1052536"
+      }
+    }
+  }
+}
