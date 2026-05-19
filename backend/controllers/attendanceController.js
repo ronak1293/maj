@@ -237,41 +237,16 @@ class FaceSORT {
 export const markAttendance = async (req, res) => {
   try {
     const { courseId } = req.params;
-    const file = req.file;
 
-    if (!file) {
-      return res.status(400).json({ error: 'No video uploaded' });
-    }
-
-    const PYTHON_URL = process.env.PYTHON_SERVER_URL || "http://localhost:8000";
-
-    // Send video buffer directly to Python — no disk save
-    const formData = new FormData();
-    formData.append('file', file.buffer, {
-      filename: file.originalname || 'classroom.mp4',
-      contentType: file.mimetype || 'video/mp4',
-    });
-
-    const pyResponse = await axios.post(
-      `${PYTHON_URL}/attendance`,
-      formData,
-      {
-        headers: formData.getHeaders(),
-        maxContentLength: Infinity,
-        maxBodyLength: Infinity,
-        // video processing takes time — give it 3 minutes
-        timeout: 180000,
-      }
-    );
-
-    const frames = pyResponse.data.frames;
+    // Now accepts pre-extracted frames from Python (sent as JSON by the app)
+    const frames = req.body.frames;
 
     if (!frames || frames.length === 0) {
-      return res.status(400).json({ error: 'No embeddings found' });
+      return res.status(400).json({ error: 'No frames provided' });
     }
 
+    // ── everything below stays exactly the same as before ──
     const tracker = new FaceSORT();
-
     for (const frame of frames) {
       const dets = (frame.detections || []).map(d => ({
         bio:  d.bio  || d.embedding,
@@ -280,6 +255,7 @@ export const markAttendance = async (req, res) => {
       }));
       tracker.update(dets);
     }
+    // ... rest of your matching + DB logic unchanged
 
     const trackedFaces = tracker.getAveragedEmbeddings();
 
