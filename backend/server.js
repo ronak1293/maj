@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 import cors from 'cors';
 import dotenv from 'dotenv';
 
-import courseRoutes from './routes/courseRoute.js'
+import courseRoutes from './routes/courseRoute.js';
 import studentRoutes from './routes/studentRoute.js';
 import teacherRoutes from './routes/teacherRoute.js';
 import attendanceRoutes from './routes/attendanceRoutes.js';
@@ -18,29 +18,38 @@ app.use((req, res, next) => {
   next();
 });
 app.use(express.json());
-app.use('/uploads', express.static('uploads'));
+
+// REMOVE this line — no disk on Vercel
+// app.use('/uploads', express.static('uploads'));
 
 app.use('/courses', courseRoutes);
 app.use('/students', studentRoutes);
 app.use('/teachers', teacherRoutes);
 app.use('/attendance', attendanceRoutes);
 
-// MongoDB connection
-mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log("MongoDB connected"))
-  .catch(err => console.log(err));
+// MongoDB — connect once, reuse across serverless invocations
+let isConnected = false;
+
+const connectDB = async () => {
+  if (isConnected) return;
+  await mongoose.connect(process.env.MONGO_URI);
+  isConnected = true;
+  console.log("MongoDB connected");
+};
+
+connectDB().catch(err => console.log("MongoDB error:", err));
 
 app.get('/', (req, res) => {
-  res.json({ "res": "ok" });
+  res.json({ res: "ok" });
 });
 
-// Keep this for local development
-const PORT = process.env.PORT || 3000;
+// Only listen locally — Vercel handles this in production
 if (process.env.NODE_ENV !== 'production') {
+  const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
   });
 }
 
-// This line is what Vercel needs
+// This is what Vercel actually uses
 export default app;
