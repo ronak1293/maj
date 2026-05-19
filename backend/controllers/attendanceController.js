@@ -238,14 +238,32 @@ export const markAttendance = async (req, res) => {
   try {
     const { courseId } = req.params;
 
-    // Now accepts pre-extracted frames from Python (sent as JSON by the app)
-    const frames = req.body.frames;
+    console.log('body keys:', Object.keys(req.body || {}));
+    console.log('frames received:', req.body?.frames?.length ?? 'MISSING');
 
-    if (!frames || frames.length === 0) {
-      return res.status(400).json({ error: 'No frames provided' });
-    }
+    const frames = req.body?.frames ?? [];
 
-    // ── everything below stays exactly the same as before ──
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // ── helper: mark all absent and return ──
+    const markAllAbsent = async () => {
+      const students = await Student.find();
+      if (students.length) {
+        await Attendance.bulkWrite(students.map(s => ({
+          updateOne: {
+            filter: { studentId: s.studentId, courseId, date: today },
+            update: { $set: { status: 'absent' } },
+            upsert: true,
+          },
+        })));
+      }
+      return res.json({ present: [], totalTracks: 0, totalFrames: frames.length });
+    };
+
+    // no frames → everyone absent, still 200
+    if (frames.length === 0) return markAllAbsent();
+
     const tracker = new FaceSORT();
     for (const frame of frames) {
       const dets = (frame.detections || []).map(d => ({
@@ -255,13 +273,11 @@ export const markAttendance = async (req, res) => {
       }));
       tracker.update(dets);
     }
-    // ... rest of your matching + DB logic unchanged
 
     const trackedFaces = tracker.getAveragedEmbeddings();
 
-    if (trackedFaces.length === 0) {
-      return res.status(400).json({ error: 'No embeddings found' });
-    }
+    // no faces tracked → everyone absent, still 200
+    if (trackedFaces.length === 0) return markAllAbsent();
 
     console.log(`FaceSORT produced ${trackedFaces.length} unique face track(s)`);
 
@@ -274,9 +290,7 @@ export const markAttendance = async (req, res) => {
 
       for (const enrollment of enrollments) {
         const sim = cosineSimilarity(face.embedding, enrollment.embedding);
-        console.log(
-          `Track ${face.trackId} vs ${enrollment.studentId}: sim=${sim.toFixed(3)}`
-        );
+        console.log(`Track ${face.trackId} vs ${enrollment.studentId}: sim=${sim.toFixed(3)}`);
         if (sim > bestSim) {
           bestSim    = sim;
           bestEnroll = enrollment;
@@ -284,9 +298,7 @@ export const markAttendance = async (req, res) => {
       }
 
       if (bestSim > 0.5 && bestEnroll) {
-        const student = await Student.findOne({
-          studentId: bestEnroll.studentId
-        });
+        const student = await Student.findOne({ studentId: bestEnroll.studentId });
         if (student) {
           presentStudents.push({
             studentId:  student.studentId,
@@ -300,33 +312,25 @@ export const markAttendance = async (req, res) => {
 
     const unique = {};
     presentStudents.forEach(s => {
-      if (!unique[s.studentId] ||
-          s.similarity > unique[s.studentId].similarity) {
+      if (!unique[s.studentId] || s.similarity > unique[s.studentId].similarity) {
         unique[s.studentId] = s;
       }
     });
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
     const presentIds = new Set(Object.keys(unique));
     const students   = await Student.find();
 
-    const bulkOps = students.map(student => ({
+    await Attendance.bulkWrite(students.map(student => ({
       updateOne: {
         filter: { studentId: student.studentId, courseId, date: today },
         update: {
           $set: {
-            status: presentIds.has(String(student.studentId))
-              ? 'present'
-              : 'absent'
-          }
+            status: presentIds.has(String(student.studentId)) ? 'present' : 'absent',
+          },
         },
         upsert: true,
       },
-    }));
-
-    await Attendance.bulkWrite(bulkOps);
+    })));
 
     res.json({
       present:     Object.values(unique),
