@@ -7,7 +7,6 @@ import { getStudentDetails } from '../controllers/studentController.js';
 import { getStudentCourses } from '../controllers/studentController.js';
 import multer from 'multer';
 const router = express.Router();
-const router = express.Router();
 
 
 const storage = multer.memoryStorage();
