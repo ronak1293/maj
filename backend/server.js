@@ -33,7 +33,7 @@ let isConnected = false;
 
 const connectDB = async () => {
   if (isConnected) return;
-  await mongoose.connect(process.env.MONGO_URI);
+  await mongoose.connect('mongodb+srv://ronak:1293@cluster0.mhetmzm.mongodb.net/attendance');
   isConnected = true;
   console.log("MongoDB connected");
 };

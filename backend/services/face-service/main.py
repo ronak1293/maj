@@ -264,7 +264,7 @@ def sahi_detect(img: np.ndarray, tile_size: int = 640,
 #  VIDEO FRAME EXTRACTION
 # ══════════════════════════════════════════════
 
-FRAME_SAMPLE_INTERVAL = 8
+FRAME_SAMPLE_INTERVAL = 27
 
 def extract_frames(video_path: str) -> list[tuple[int, np.ndarray]]:
     """

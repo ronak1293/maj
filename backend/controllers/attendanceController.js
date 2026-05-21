@@ -5,7 +5,7 @@ import Attendance from '../models/Attendance.js';
 import FormData from 'form-data';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// All your existing helpers stay exactly the same
+// 
 // ─────────────────────────────────────────────────────────────────────────────
 
 const cosineSimilarity = (a, b) => {
@@ -231,7 +231,7 @@ class FaceSORT {
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CONTROLLER — only this function changes significantly
+// 
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const markAttendance = async (req, res) => {

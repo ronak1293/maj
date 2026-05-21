@@ -1,11 +1,12 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity,
-  ActivityIndicator, Alert, ScrollView, Animated,
+  ActivityIndicator, Alert, ScrollView, Animated, Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CameraView, useCameraPermissions, useMicrophonePermissions } from 'expo-camera';
 import { useLocalSearchParams, useNavigation } from 'expo-router';
+import * as ImagePicker from 'expo-image-picker';
 import axios from 'axios';
 import { Platform } from 'react-native';
 
@@ -42,6 +43,9 @@ export default function CameraScreen() {
   const [countdown, setCountdown] = useState(RECORD_DURATION / 1000);
   const [records, setRecords] = useState([]);
   const [downloading, setDownloading] = useState(false);
+
+  // ── NEW: source picker modal ──
+  const [showSourceModal, setShowSourceModal] = useState(false);
 
   // pulse animation for recording dot
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -89,41 +93,14 @@ export default function CameraScreen() {
     }
   }, [course, navigation]);
 
-  const handleCapture = async () => {
-  if (!cameraRef.current || phase !== 'preview') return;
-
-  try {
-    const camera = cameraRef.current;
-
-    setPhase('recording');
-
-    await new Promise(resolve => setTimeout(resolve, 300));
-
-    const videoPromise = camera.recordAsync({ maxDuration: RECORD_DURATION / 1000 });
-
-    stopTimerRef.current = setTimeout(() => {
-      try { camera.stopRecording(); } catch (_) {}
-    }, RECORD_DURATION);
-
-    const video = await videoPromise;
-
-    if (stopTimerRef.current) {
-      clearTimeout(stopTimerRef.current);
-      stopTimerRef.current = null;
-    }
-
-    if (!video?.uri) {
-      throw new Error('No video captured. Please try again.');
-    }
-
+  // ── SHARED: send any video URI to backend ──────────────────────────────────
+  const processVideoUri = async (videoUri) => {
     setPhase('processing');
 
-    // ── Step 1: send video directly to Python ──
+    // ── Step 1: send video to Python ──
     const formData = new FormData();
     formData.append('file', {
-      uri: Platform.OS === 'android'
-        ? video.uri
-        : video.uri.replace('file://', ''),
+      uri: Platform.OS === 'android' ? videoUri : videoUri.replace('file://', ''),
       name: 'attendance.mp4',
       type: 'video/mp4',
     });
@@ -140,7 +117,6 @@ export default function CameraScreen() {
           if (xhr.status === 200) {
             resolve(response);
           } else {
-            // no faces detected or any other python error → treat as empty
             console.log('Python non-200:', response);
             resolve({ frames: [] });
           }
@@ -161,7 +137,6 @@ export default function CameraScreen() {
       { headers: { 'Content-Type': 'application/json' } }
     );
 
-    // axios wraps response in .data
     const presentIds = (res.data.present ?? []).map((s) => s.studentId);
 
     const res2 = await axios.get(
@@ -177,17 +152,68 @@ export default function CameraScreen() {
 
     setRecords(attendance);
     setPhase('result');
+  };
 
-  } catch (e) {
-    console.log('ERROR:', e.message);
-    if (stopTimerRef.current) {
-      clearTimeout(stopTimerRef.current);
-      stopTimerRef.current = null;
+  // ── OPTION A: record live video ────────────────────────────────────────────
+  const handleLiveRecord = async () => {
+    setShowSourceModal(false);
+    if (!cameraRef.current || phase !== 'preview') return;
+
+    try {
+      const camera = cameraRef.current;
+      setPhase('recording');
+
+      await new Promise(resolve => setTimeout(resolve, 300));
+
+      const videoPromise = camera.recordAsync({ maxDuration: RECORD_DURATION / 1000 });
+
+      stopTimerRef.current = setTimeout(() => {
+        try { camera.stopRecording(); } catch (_) {}
+      }, RECORD_DURATION);
+
+      const video = await videoPromise;
+
+      if (stopTimerRef.current) {
+        clearTimeout(stopTimerRef.current);
+        stopTimerRef.current = null;
+      }
+
+      if (!video?.uri) throw new Error('No video captured. Please try again.');
+
+      await processVideoUri(video.uri);
+
+    } catch (e) {
+      console.log('ERROR:', e.message);
+      if (stopTimerRef.current) {
+        clearTimeout(stopTimerRef.current);
+        stopTimerRef.current = null;
+      }
+      Alert.alert('Error', e.message || 'Failed to process attendance.');
+      setPhase('preview');
     }
-    Alert.alert('Error', e.message || 'Failed to process attendance.');
-    setPhase('preview');
-  }
-};
+  };
+
+  // ── OPTION B: pick video from gallery ─────────────────────────────────────
+  const handleGalleryPick = async () => {
+    setShowSourceModal(false);
+
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Videos,
+        allowsEditing: false,
+        quality: 1,
+      });
+
+      if (result.canceled || !result.assets?.[0]?.uri) return;
+
+      await processVideoUri(result.assets[0].uri);
+
+    } catch (e) {
+      console.log('Gallery ERROR:', e.message);
+      Alert.alert('Error', e.message || 'Failed to pick video.');
+      setPhase('preview');
+    }
+  };
 
   const handleDownload = async () => {
     if (!course) return;
@@ -359,7 +385,7 @@ export default function CameraScreen() {
     );
   }
 
-  // ── Camera preview + recording overlay (camera stays mounted) ──
+  // ── Camera preview + recording overlay ────────────────────────────────────
   return (
     <View style={styles.container}>
       <CameraView
@@ -369,10 +395,9 @@ export default function CameraScreen() {
         mode="video"
       />
 
-      {/* Recording overlay — shown on top of camera while recording */}
+      {/* Recording overlay */}
       {phase === 'recording' && (
         <View style={styles.recordingOverlay}>
-          {/* Top pill */}
           <View style={styles.recPill}>
             <Animated.View style={[styles.recDot, { transform: [{ scale: pulseAnim }] }]} />
             <Text style={styles.recPillText}>Recording... {countdown}s</Text>
@@ -391,18 +416,84 @@ export default function CameraScreen() {
       <View style={styles.captureArea}>
         {phase === 'preview' ? (
           <>
-            <TouchableOpacity onPress={handleCapture} style={styles.captureOuter} activeOpacity={0.8}>
+            <TouchableOpacity
+              onPress={() => setShowSourceModal(true)}  // ← opens modal instead of directly recording
+              style={styles.captureOuter}
+              activeOpacity={0.8}
+            >
               <View style={[styles.captureInner, { backgroundColor: accent }]} />
             </TouchableOpacity>
-            <Text style={styles.captureHint}>Tap to record 4 seconds</Text>
+            <Text style={styles.captureHint}>Tap to take attendance</Text>
           </>
         ) : (
-          // While recording show a disabled stop indicator
           <View style={styles.captureOuter}>
             <View style={[styles.captureInnerRecording]} />
           </View>
         )}
       </View>
+
+      {/* ── Source picker modal ── */}
+      <Modal
+        visible={showSourceModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowSourceModal(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalBackdrop}
+          activeOpacity={1}
+          onPress={() => setShowSourceModal(false)}
+        >
+          {/* Stop touches inside sheet from closing modal */}
+          <TouchableOpacity activeOpacity={1} onPress={() => {}}>
+            <View style={styles.modalSheet}>
+              <View style={styles.modalHandle} />
+              <Text style={styles.modalTitle}>Take Attendance</Text>
+              <Text style={styles.modalSubtitle}>Choose video source</Text>
+
+              {/* Live camera option */}
+              <TouchableOpacity
+                style={[styles.sourceBtn, { borderColor: accent }]}
+                onPress={handleLiveRecord}
+                activeOpacity={0.85}
+              >
+                <View style={[styles.sourceIconBox, { backgroundColor: accent + '18' }]}>
+                  <Text style={styles.sourceIcon}>📷</Text>
+                </View>
+                <View style={styles.sourceTextBox}>
+                  <Text style={styles.sourceBtnTitle}>Record Live Video</Text>
+                  <Text style={styles.sourceBtnSub}>Capture 4 seconds from camera</Text>
+                </View>
+                <Text style={[styles.sourceArrow, { color: accent }]}>›</Text>
+              </TouchableOpacity>
+
+              {/* Gallery option */}
+              <TouchableOpacity
+                style={[styles.sourceBtn, { borderColor: '#CCC' }]}
+                onPress={handleGalleryPick}
+                activeOpacity={0.85}
+              >
+                <View style={[styles.sourceIconBox, { backgroundColor: '#F0F0F0' }]}>
+                  <Text style={styles.sourceIcon}>🎞️</Text>
+                </View>
+                <View style={styles.sourceTextBox}>
+                  <Text style={styles.sourceBtnTitle}>Upload from Gallery</Text>
+                  <Text style={styles.sourceBtnSub}>Pick an existing video file</Text>
+                </View>
+                <Text style={[styles.sourceArrow, { color: '#999' }]}>›</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.cancelBtn}
+                onPress={() => setShowSourceModal(false)}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.cancelBtnText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
     </View>
   );
 }
@@ -512,24 +603,54 @@ const styles = StyleSheet.create({
     paddingTop: 60,
   },
   recPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: 'row', alignItems: 'center',
     backgroundColor: 'rgba(0,0,0,0.65)',
-    paddingHorizontal: 18,
-    paddingVertical: 10,
-    borderRadius: 30,
-    gap: 10,
+    paddingHorizontal: 18, paddingVertical: 10, borderRadius: 30, gap: 10,
   },
-  recDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: '#FF3B30',
+  recDot: { width: 12, height: 12, borderRadius: 6, backgroundColor: '#FF3B30' },
+  recPillText: { color: '#fff', fontSize: 15, fontWeight: '700', letterSpacing: 0.3 },
+
+  // ── source picker modal ──
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    justifyContent: 'flex-end',
   },
-  recPillText: {
-    color: '#fff',
-    fontSize: 15,
-    fontWeight: '700',
-    letterSpacing: 0.3,
+  modalSheet: {
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    paddingHorizontal: 20,
+    paddingTop: 14,
+    paddingBottom: 36,
   },
+  modalHandle: {
+    width: 40, height: 4, borderRadius: 2,
+    backgroundColor: '#DDD', alignSelf: 'center', marginBottom: 20,
+  },
+  modalTitle: { fontSize: 20, fontWeight: '800', color: '#1A1A2E', marginBottom: 4 },
+  modalSubtitle: { fontSize: 13, color: '#888', marginBottom: 20 },
+
+  sourceBtn: {
+    flexDirection: 'row', alignItems: 'center',
+    borderWidth: 1.5, borderRadius: 18,
+    paddingVertical: 16, paddingHorizontal: 16,
+    marginBottom: 12, gap: 14,
+  },
+  sourceIconBox: {
+    width: 48, height: 48, borderRadius: 14,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  sourceIcon: { fontSize: 22 },
+  sourceTextBox: { flex: 1 },
+  sourceBtnTitle: { fontSize: 15, fontWeight: '700', color: '#1A1A2E' },
+  sourceBtnSub: { fontSize: 12, color: '#888', marginTop: 2 },
+  sourceArrow: { fontSize: 24, fontWeight: '300' },
+
+  cancelBtn: {
+    marginTop: 4, paddingVertical: 14,
+    alignItems: 'center', borderRadius: 14,
+    backgroundColor: '#F5F5F5',
+  },
+  cancelBtnText: { fontSize: 15, fontWeight: '600', color: '#555' },
 });
