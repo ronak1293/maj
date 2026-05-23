@@ -60,3 +60,21 @@ export const getcourse = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+
+
+
+export const deleteCourse = async (req, res) => {
+  try {
+    const { courseId } = req.params;
+
+    // Remove the course
+    await Course.findByIdAndDelete(courseId);
+
+    // Remove all enrollments associated with this course
+    await Enrollment.deleteMany({ course: courseId });
+
+    res.json({ message: 'Course and related enrollments deleted successfully' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};

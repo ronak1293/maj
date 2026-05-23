@@ -57,57 +57,73 @@ export default function AdminDashboard() {
     ]);
   };
 
-  const renderCourse = ({ item }) => (
-    <View
+  const handleRemoveCourse = (courseId, courseName) => {
+  Alert.alert(
+    'Remove Course',
+    `Are you sure you want to remove "${courseName}"? This will also delete all enrollments.`,
+    [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Remove',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await axios.delete(
+              `${process.env.EXPO_PUBLIC_API_URL}/courses/${courseId}`
+            );
+            setCourses((prev) => prev.filter((c) => c._id !== courseId));
+          } catch (err) {
+            Alert.alert('Error', 'Failed to remove course. Please try again.');
+            console.log('Error removing course:', err.message);
+          }
+        },
+      },
+    ]
+  );
+};
+
+const renderCourse = ({ item }) => (
+  <View
+    style={{
+      backgroundColor: '#FFFFFF',
+      padding: 18,
+      marginBottom: 16,
+      borderRadius: 18,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.08,
+      shadowRadius: 10,
+      elevation: 5,
+      borderWidth: 1,
+      borderColor: '#EEF2FF',
+    }}
+  >
+    <Text
       style={{
-        backgroundColor: '#FFFFFF',
-        padding: 18,
-        marginBottom: 16,
-        borderRadius: 18,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.08,
-        shadowRadius: 10,
-        elevation: 5,
-        borderWidth: 1,
-        borderColor: '#EEF2FF',
+        color: '#111827',
+        fontSize: 20,
+        fontWeight: '700',
+        marginBottom: 8,
       }}
     >
-      <Text
-        style={{
-          color: '#111827',
-          fontSize: 20,
-          fontWeight: '700',
-          marginBottom: 8,
-        }}
-      >
-        {item.name}
-      </Text>
+      {item.name}
+    </Text>
 
-      <Text
-        style={{
-          color: '#6B7280',
-          fontSize: 15,
-          marginBottom: 4,
-        }}
-      >
-        Teacher: {item.teacherName}
-      </Text>
+    <Text style={{ color: '#6B7280', fontSize: 15, marginBottom: 4 }}>
+      Teacher: {item.teacherName}
+    </Text>
 
-      <Text
-        style={{
-          color: '#6B7280',
-          fontSize: 15,
-        }}
-      >
-        Phone: {item.teacherPhone}
-      </Text>
+    <Text style={{ color: '#6B7280', fontSize: 15 }}>
+      Phone: {item.teacherPhone}
+    </Text>
 
+    {/* Button Row */}
+    <View style={{ flexDirection: 'row', marginTop: 16, gap: 10 }}>
       <TouchableOpacity
         onPress={() => router.push(`/upload/${item._id}`)}
         activeOpacity={0.85}
         style={{
-          marginTop: 16,
+          flex: 1,
           backgroundColor: '#2563EB',
           paddingVertical: 13,
           borderRadius: 12,
@@ -119,19 +135,33 @@ export default function AdminDashboard() {
           elevation: 4,
         }}
       >
-        <Text
-          style={{
-            color: '#FFFFFF',
-            fontWeight: '600',
-            fontSize: 15,
-          }}
-        >
-          Upload Student Photos
+        <Text style={{ color: '#FFFFFF', fontWeight: '600', fontSize: 15 }}>
+          Upload Photos
+        </Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        onPress={() => handleRemoveCourse(item._id, item.name)}
+        activeOpacity={0.85}
+        style={{
+          backgroundColor: '#FEF2F2',
+          paddingHorizontal: 16,
+          paddingVertical: 13,
+          borderRadius: 12,
+          alignItems: 'center',
+          borderWidth: 1,
+          borderColor: '#FECACA',
+        }}
+      >
+        <Text style={{ color: '#EF4444', fontWeight: '600', fontSize: 15 }}>
+          Remove
         </Text>
       </TouchableOpacity>
     </View>
-  );
+  </View>
+);
 
+  
   return (
     <SafeAreaView
       style={{
