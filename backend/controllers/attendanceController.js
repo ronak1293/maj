@@ -5,7 +5,7 @@ import Attendance from '../models/Attendance.js';
 import FormData from 'form-data';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 
+// Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
 const cosineSimilarity = (a, b) => {
@@ -231,7 +231,7 @@ class FaceSORT {
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 
+// markAttendance  —  POST /attendance/mark/:courseId
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const markAttendance = async (req, res) => {
@@ -246,7 +246,7 @@ export const markAttendance = async (req, res) => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    // ── helper: mark all absent and return ──
+    // helper: mark all absent and return
     const markAllAbsent = async () => {
       const students = await Student.find();
       if (students.length) {
@@ -261,7 +261,6 @@ export const markAttendance = async (req, res) => {
       return res.json({ present: [], totalTracks: 0, totalFrames: frames.length });
     };
 
-    // no frames → everyone absent, still 200
     if (frames.length === 0) return markAllAbsent();
 
     const tracker = new FaceSORT();
@@ -276,7 +275,6 @@ export const markAttendance = async (req, res) => {
 
     const trackedFaces = tracker.getAveragedEmbeddings();
 
-    // no faces tracked → everyone absent, still 200
     if (trackedFaces.length === 0) return markAllAbsent();
 
     console.log(`FaceSORT produced ${trackedFaces.length} unique face track(s)`);
@@ -338,6 +336,96 @@ export const markAttendance = async (req, res) => {
       totalFrames: frames.length,
     });
 
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// getBelow75  —  GET /attendance/below75/:courseId
+//
+// Returns every enrolled student whose attendance percentage across all
+// recorded sessions for the given course is strictly below 75 %.
+//
+// Response shape:
+// [
+//   {
+//     studentId: string,
+//     name: string,
+//     presentDays: number,   // sessions marked present
+//     totalDays:   number,   // total sessions recorded for this course
+//     attendancePercentage: number   // 0–100
+//   },
+//   ...
+// ]
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const getBelow75 = async (req, res) => {
+  try {
+    const { courseId } = req.params;
+
+    // All enrolled students for this course
+    const enrollments = await Enrollment.find({ course: courseId });
+    if (!enrollments.length) {
+      return res.json([]);
+    }
+
+    const enrolledIds = enrollments.map(e => String(e.studentId));
+
+    // All distinct session dates that have at least one attendance record
+    // for this course (regardless of status) — these are the "total days"
+    const allRecords = await Attendance.find({ courseId });
+
+    // Unique dates (normalised to midnight UTC strings for grouping)
+    const uniqueDates = [
+      ...new Set(
+        allRecords.map(r => new Date(r.date).toISOString().slice(0, 10))
+      ),
+    ];
+    const totalDays = uniqueDates.length;
+
+    if (totalDays === 0) {
+      return res.json([]);
+    }
+
+    // Count present days per student
+    const presentCounts = {};
+    for (const record of allRecords) {
+      const sid = String(record.studentId);
+      if (!enrolledIds.includes(sid)) continue;
+      if (!presentCounts[sid]) presentCounts[sid] = 0;
+      if (record.status === 'present') presentCounts[sid]++;
+    }
+
+    // Fetch student details for enrolled students
+    const students = await Student.find({ studentId: { $in: enrolledIds } });
+    const studentMap = {};
+    students.forEach(s => { studentMap[String(s.studentId)] = s; });
+
+    // Build result — only include students strictly below 75 %
+    const below75 = [];
+    for (const sid of enrolledIds) {
+      const presentDays = presentCounts[sid] ?? 0;
+      const attendancePercentage = (presentDays / totalDays) * 100;
+
+      if (attendancePercentage < 75) {
+        const student = studentMap[sid];
+        below75.push({
+          studentId:            sid,
+          name:                 student?.name ?? 'Unknown',
+          presentDays,
+          totalDays,
+          attendancePercentage,
+        });
+      }
+    }
+
+    // Sort ascending by attendance percentage (worst first)
+    below75.sort((a, b) => a.attendancePercentage - b.attendancePercentage);
+
+    res.json(below75);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
